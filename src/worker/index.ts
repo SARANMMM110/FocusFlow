@@ -3,20 +3,15 @@ import { getCookie, setCookie } from "hono/cookie";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import { query, execute } from "./db";
+import { query, execute, initDatabase } from "./db";
 import { getGoogleAuthUrl, exchangeCodeForToken, getGoogleUserInfo } from "./googleOAuth";
 
 // Session cookie name
 const SESSION_TOKEN_COOKIE_NAME = "session_token";
 
 interface Env {
-  // MySQL Database Configuration
-  DB_HOST?: string;
-  DB_PORT?: string;
-  DB_USER?: string;
-  DB_PASSWORD?: string;
-  DB_NAME?: string;
-  DB_SSL?: string;
+  // D1 Database (Cloudflare D1)
+  DB: D1Database;
   
   // Google OAuth Configuration
   GOOGLE_OAUTH_CLIENT_ID: string;
@@ -35,6 +30,39 @@ interface Env {
   
   // R2 Bucket (optional, for file storage)
   R2_BUCKET?: any;
+}
+
+interface D1Database {
+  prepare(query: string): D1PreparedStatement;
+  exec(query: string): Promise<D1ExecResult>;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
+}
+
+interface D1PreparedStatement {
+  bind(...values: unknown[]): D1PreparedStatement;
+  first<T = unknown>(colName?: string): Promise<T | null>;
+  run<T = unknown>(): Promise<D1Result<T>>;
+  all<T = unknown>(): Promise<D1Result<T>>;
+  raw<T = unknown>(): Promise<T[]>;
+}
+
+interface D1Result<T = unknown> {
+  results: T[];
+  success: boolean;
+  meta: {
+    duration: number;
+    size_after?: number;
+    rows_read?: number;
+    rows_written?: number;
+    last_row_id?: number;
+    changed_db?: boolean;
+    changes?: number;
+  };
+}
+
+interface D1ExecResult {
+  count: number;
+  duration: number;
 }
 
 type User = {
@@ -63,6 +91,15 @@ const app = new Hono<{
   };
 }>();
 
+// Database initialization middleware
+app.use("*", async (c, next) => {
+  // Initialize database with D1 binding
+  if (c.env.DB) {
+    initDatabase(c.env.DB);
+  }
+  await next();
+});
+
 // Auth middleware - validates session token and sets user in context
 const authMiddleware = async (c: any, next: () => Promise<void>) => {
   const sessionToken = getCookie(c, SESSION_TOKEN_COOKIE_NAME);
@@ -72,9 +109,9 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   }
 
   try {
-    // Check session in database
+    // Check session in database (SQLite uses datetime('now') instead of NOW())
     const sessions = await query<{ user_id: string; expires_at: string }>(
-      "SELECT user_id, expires_at FROM user_sessions WHERE session_token = ? AND expires_at > NOW()",
+      "SELECT user_id, expires_at FROM user_sessions WHERE session_token = ? AND expires_at > datetime('now')",
       [sessionToken]
     );
 
@@ -322,7 +359,7 @@ app.post("/api/profile/photo", authMiddleware, async (c) => {
 
     // Update user profile with new photo URL
     await execute(
-      "UPDATE user_profiles SET profile_photo_url = ?, updated_at = NOW() WHERE user_id = ?",
+      "UPDATE user_profiles SET profile_photo_url = ?, updated_at = datetime('now') WHERE user_id = ?",
       [publicUrl, user!.id]
     );
 
@@ -381,7 +418,7 @@ const adminMiddleware = async (c: any, next: () => Promise<void>) => {
     `SELECT au.*, ads.expires_at 
      FROM admin_users au 
      JOIN admin_sessions ads ON au.id = ads.admin_id 
-     WHERE ads.session_token = ? AND ads.expires_at > NOW()`,
+     WHERE ads.session_token = ? AND ads.expires_at > datetime('now')`,
     [token]
   );
 
@@ -521,7 +558,7 @@ app.get("/api/auth/google/callback", async (c) => {
           subscriptionPlan = regCode.plan_id;
           // Increment usage
           await execute(
-            "UPDATE registration_codes SET current_uses = current_uses + 1, updated_at = NOW() WHERE code = ?",
+            "UPDATE registration_codes SET current_uses = current_uses + 1, updated_at = datetime('now') WHERE code = ?",
             [registrationCode]
           );
         }
@@ -544,7 +581,7 @@ app.get("/api/auth/google/callback", async (c) => {
       userId = googleUser.id;
       await execute(
         `INSERT INTO users (user_id, email, name, google_user_id, profile_picture_url, signup_source, subscription_plan, last_login_at)
-         VALUES (?, ?, ?, ?, ?, 'google-oauth', ?, NOW())`,
+         VALUES (?, ?, ?, ?, ?, 'google-oauth', ?, datetime('now'))`,
         [
           userId,
           googleUser.email,
@@ -566,7 +603,7 @@ app.get("/api/auth/google/callback", async (c) => {
       // Update existing user
       userId = existingUsers[0].user_id;
       await execute(
-        "UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE user_id = ?",
+        "UPDATE users SET last_login_at = datetime('now'), updated_at = datetime('now') WHERE user_id = ?",
         [userId]
       );
 
@@ -578,7 +615,7 @@ app.get("/api/auth/google/callback", async (c) => {
         
         if (newLevel > currentLevel) {
           await execute(
-            "UPDATE users SET subscription_plan = ?, updated_at = NOW() WHERE user_id = ?",
+            "UPDATE users SET subscription_plan = ?, updated_at = datetime('now') WHERE user_id = ?",
             [subscriptionPlan, userId]
           );
         }

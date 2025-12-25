@@ -1,90 +1,117 @@
 /**
- * MySQL Database Connection
+ * D1 Database Connection
  * 
- * This module provides MySQL database connection and query utilities.
+ * This module provides D1 database connection and query utilities.
  */
 
-import mysql from "mysql2/promise";
-
-export interface DatabaseConfig {
-  host: string;
-  port: number;
-  user: string;
-  password: string;
-  database: string;
-  ssl?: boolean;
+export interface D1Database {
+  prepare(query: string): D1PreparedStatement;
+  exec(query: string): Promise<D1ExecResult>;
+  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
 }
 
-let pool: mysql.Pool | null = null;
+export interface D1PreparedStatement {
+  bind(...values: unknown[]): D1PreparedStatement;
+  first<T = unknown>(colName?: string): Promise<T | null>;
+  run<T = unknown>(): Promise<D1Result<T>>;
+  all<T = unknown>(): Promise<D1Result<T>>;
+  raw<T = unknown>(): Promise<T[]>;
+}
 
-/**
- * Initialize MySQL connection pool
- */
-export function initDatabase(config: DatabaseConfig): mysql.Pool {
-  if (pool) {
-    return pool;
-  }
-
-  const poolConfig: mysql.PoolOptions = {
-    host: config.host,
-    port: config.port,
-    user: config.user,
-    password: config.password,
-    database: config.database,
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0,
-    enableKeepAlive: true,
-    keepAliveInitialDelay: 0,
+export interface D1Result<T = unknown> {
+  results: T[];
+  success: boolean;
+  meta: {
+    duration: number;
+    size_after?: number;
+    rows_read?: number;
+    rows_written?: number;
+    last_row_id?: number;
+    changed_db?: boolean;
+    changes?: number;
   };
+}
 
-  if (config.ssl) {
-    poolConfig.ssl = { rejectUnauthorized: false };
-  }
+export interface D1ExecResult {
+  count: number;
+  duration: number;
+}
 
-  pool = mysql.createPool(poolConfig);
+let db: D1Database | null = null;
 
-  return pool;
+/**
+ * Initialize D1 database connection
+ */
+export function initDatabase(database: D1Database): void {
+  db = database;
+  console.log("✅ D1 Database initialized");
 }
 
 /**
- * Get database connection pool
+ * Get D1 database instance
  */
-export function getDatabase(): mysql.Pool {
-  if (!pool) {
+export function getDatabase(): D1Database {
+  if (!db) {
     throw new Error("Database not initialized. Call initDatabase() first.");
   }
-  return pool;
+  return db;
 }
 
 /**
  * Execute a SELECT query and return results
  */
 export async function query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
-  const db = getDatabase();
-  const [rows] = await db.execute(sql, params);
-  return rows as T[];
+  const database = getDatabase();
+  try {
+    let stmt = database.prepare(sql);
+    
+    // Bind parameters if provided
+    if (params.length > 0) {
+      stmt = stmt.bind(...params);
+    }
+    
+    const result = await stmt.all<T>();
+    return result.results || [];
+  } catch (error: any) {
+    console.error("Database query error:", {
+      message: error.message,
+      sql: sql.substring(0, 100), // Log first 100 chars of SQL
+    });
+    throw error;
+  }
 }
 
 /**
  * Execute an INSERT/UPDATE/DELETE query
  */
 export async function execute(sql: string, params: any[] = []): Promise<{ affectedRows: number; insertId?: number }> {
-  const db = getDatabase();
-  const [result] = await db.execute(sql, params) as any;
-  return {
-    affectedRows: result.affectedRows || 0,
-    insertId: result.insertId,
-  };
-}
-
-/**
- * Close database connection pool
- */
-export async function closeDatabase(): Promise<void> {
-  if (pool) {
-    await pool.end();
-    pool = null;
+  const database = getDatabase();
+  try {
+    let stmt = database.prepare(sql);
+    
+    // Bind parameters if provided
+    if (params.length > 0) {
+      stmt = stmt.bind(...params);
+    }
+    
+    const result = await stmt.run();
+    return {
+      affectedRows: result.meta.changes || result.meta.rows_written || 0,
+      insertId: result.meta.last_row_id,
+    };
+  } catch (error: any) {
+    console.error("Database execute error:", {
+      message: error.message,
+      sql: sql.substring(0, 100), // Log first 100 chars of SQL
+    });
+    throw error;
   }
 }
 
+/**
+ * Close database connection (no-op for D1, but kept for compatibility)
+ */
+export async function closeDatabase(): Promise<void> {
+  // D1 doesn't require explicit connection closing
+  db = null;
+}
