@@ -37,6 +37,12 @@ initDatabase(dbConfig);
 const port = parseInt(process.env.PORT || "3000");
 const isProduction = process.env.NODE_ENV === "production";
 
+const FRONTEND_URL =
+  process.env.FRONTEND_URL ||
+  (process.env.NODE_ENV === "production"
+    ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`
+    : "http://localhost:3000");
+
 // Create environment object for the worker
 const env = {
   DB_HOST: process.env.DB_HOST,
@@ -55,7 +61,7 @@ const env = {
   AWEBER_LIST_ID: process.env.AWEBER_LIST_ID,
   GOOGLE_CALENDAR_CLIENT_ID: process.env.GOOGLE_CALENDAR_CLIENT_ID,
   GOOGLE_CALENDAR_CLIENT_SECRET: process.env.GOOGLE_CALENDAR_CLIENT_SECRET,
-  FRONTEND_URL: process.env.FRONTEND_URL || (isProduction ? `http://localhost:${port}` : "http://localhost:5173"),
+  FRONTEND_URL,
 };
 
 // In production, serve static files from dist folder
