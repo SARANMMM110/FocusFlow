@@ -1,80 +1,100 @@
 /**
- * D1 Database Connection
+ * PostgreSQL Database Connection
  * 
- * This module provides D1 database connection and query utilities.
+ * This module provides PostgreSQL database connection and query utilities.
+ * Compatible with Render PostgreSQL databases.
  */
 
-export interface D1Database {
-  prepare(query: string): D1PreparedStatement;
-  exec(query: string): Promise<D1ExecResult>;
-  batch<T = unknown>(statements: D1PreparedStatement[]): Promise<D1Result<T>[]>;
+import { Pool, PoolClient } from "pg";
+
+export interface DatabaseConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+  ssl?: boolean;
 }
 
-export interface D1PreparedStatement {
-  bind(...values: unknown[]): D1PreparedStatement;
-  first<T = unknown>(colName?: string): Promise<T | null>;
-  run<T = unknown>(): Promise<D1Result<T>>;
-  all<T = unknown>(): Promise<D1Result<T>>;
-  raw<T = unknown>(): Promise<T[]>;
-}
+let pool: Pool | null = null;
 
-export interface D1Result<T = unknown> {
-  results: T[];
-  success: boolean;
-  meta: {
-    duration: number;
-    size_after?: number;
-    rows_read?: number;
-    rows_written?: number;
-    last_row_id?: number;
-    changed_db?: boolean;
-    changes?: number;
+/**
+ * Initialize PostgreSQL connection pool
+ */
+export function initDatabase(config: DatabaseConfig): Pool {
+  if (pool) {
+    return pool;
+  }
+
+  const poolConfig = {
+    host: config.host,
+    port: config.port,
+    user: config.user,
+    password: config.password,
+    database: config.database,
+    ssl: config.ssl ? { rejectUnauthorized: false } : false,
+    max: 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 2000,
   };
-}
 
-export interface D1ExecResult {
-  count: number;
-  duration: number;
-}
+  pool = new Pool(poolConfig);
 
-let db: D1Database | null = null;
+  // Test the connection
+  pool.query("SELECT NOW()")
+    .then(() => {
+      console.log("✅ PostgreSQL database connection successful");
+    })
+    .catch((error) => {
+      console.error("❌ PostgreSQL database connection failed:", {
+        message: error.message,
+        host: config.host,
+        port: config.port,
+        database: config.database,
+        ssl: config.ssl,
+      });
+    });
+
+  return pool;
+}
 
 /**
- * Initialize D1 database connection
+ * Get database connection pool
  */
-export function initDatabase(database: D1Database): void {
-  db = database;
-  console.log("✅ D1 Database initialized");
-}
-
-/**
- * Get D1 database instance
- */
-export function getDatabase(): D1Database {
-  if (!db) {
+export function getDatabase(): Pool {
+  if (!pool) {
     throw new Error("Database not initialized. Call initDatabase() first.");
   }
-  return db;
+  return pool;
+}
+
+/**
+ * Convert SQLite-style ? placeholders to PostgreSQL $1, $2, etc.
+ */
+function convertPlaceholders(sql: string): string {
+  let paramIndex = 1;
+  return sql.replace(/\?/g, () => `$${paramIndex++}`);
 }
 
 /**
  * Execute a SELECT query and return results
  */
 export async function query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
-  const database = getDatabase();
+  const db = getDatabase();
   try {
-    let stmt = database.prepare(sql);
+    // Replace SQLite-specific syntax with PostgreSQL
+    const pgSql = convertPlaceholders(
+      sql
+        .replace(/datetime\('now'\)/gi, "NOW()")
+        .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/gi, "SERIAL PRIMARY KEY")
+    );
     
-    // Bind parameters if provided
-    if (params.length > 0) {
-      stmt = stmt.bind(...params);
-    }
-    
-    const result = await stmt.all<T>();
-    return result.results || [];
+    const result = await db.query(pgSql, params);
+    return result.rows as T[];
   } catch (error: any) {
     console.error("Database query error:", {
       message: error.message,
+      code: error.code,
       sql: sql.substring(0, 100), // Log first 100 chars of SQL
     });
     throw error;
@@ -85,23 +105,32 @@ export async function query<T = any>(sql: string, params: any[] = []): Promise<T
  * Execute an INSERT/UPDATE/DELETE query
  */
 export async function execute(sql: string, params: any[] = []): Promise<{ affectedRows: number; insertId?: number }> {
-  const database = getDatabase();
+  const db = getDatabase();
   try {
-    let stmt = database.prepare(sql);
+    // Replace SQLite-specific syntax with PostgreSQL
+    const pgSql = convertPlaceholders(
+      sql
+        .replace(/datetime\('now'\)/gi, "NOW()")
+        .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/gi, "SERIAL PRIMARY KEY")
+    );
     
-    // Bind parameters if provided
-    if (params.length > 0) {
-      stmt = stmt.bind(...params);
+    const result = await db.query(pgSql, params);
+    
+    // For INSERT queries, get the last inserted ID from RETURNING clause or result
+    let insertId: number | undefined;
+    if (pgSql.toUpperCase().includes("INSERT") && result.rows.length > 0) {
+      // Check if there's an id column in the result
+      insertId = result.rows[0]?.id ? Number(result.rows[0].id) : undefined;
     }
     
-    const result = await stmt.run();
     return {
-      affectedRows: result.meta.changes || result.meta.rows_written || 0,
-      insertId: result.meta.last_row_id,
+      affectedRows: result.rowCount || 0,
+      insertId,
     };
   } catch (error: any) {
     console.error("Database execute error:", {
       message: error.message,
+      code: error.code,
       sql: sql.substring(0, 100), // Log first 100 chars of SQL
     });
     throw error;
@@ -109,9 +138,11 @@ export async function execute(sql: string, params: any[] = []): Promise<{ affect
 }
 
 /**
- * Close database connection (no-op for D1, but kept for compatibility)
+ * Close database connection pool
  */
 export async function closeDatabase(): Promise<void> {
-  // D1 doesn't require explicit connection closing
-  db = null;
+  if (pool) {
+    await pool.end();
+    pool = null;
+  }
 }

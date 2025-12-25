@@ -10,8 +10,10 @@ import { getGoogleAuthUrl, exchangeCodeForToken, getGoogleUserInfo } from "./goo
 const SESSION_TOKEN_COOKIE_NAME = "session_token";
 
 interface Env {
-  // D1 Database (Cloudflare D1)
-  DB: D1Database;
+  // Database: PostgreSQL (via query/execute functions) or D1 (Cloudflare Workers)
+  // For PostgreSQL on Render: database is initialized via initDatabase() in server.ts
+  // For D1 on Cloudflare: DB binding will be provided
+  DB?: D1Database; // Optional - only used for Cloudflare Workers with D1
   
   // Google OAuth Configuration
   GOOGLE_OAUTH_CLIENT_ID: string;
@@ -32,6 +34,7 @@ interface Env {
   R2_BUCKET?: any;
 }
 
+// D1 Database interfaces (for Cloudflare Workers)
 interface D1Database {
   prepare(query: string): D1PreparedStatement;
   exec(query: string): Promise<D1ExecResult>;
@@ -92,8 +95,10 @@ const app = new Hono<{
 }>();
 
 // Database initialization middleware
+// For Cloudflare Workers with D1: initialize from binding
+// For PostgreSQL on Node.js: database is already initialized in server.ts
 app.use("*", async (c, next) => {
-  // Initialize database with D1 binding
+  // Initialize database with D1 binding (only for Cloudflare Workers)
   if (c.env.DB) {
     initDatabase(c.env.DB);
   }
@@ -109,9 +114,10 @@ const authMiddleware = async (c: any, next: () => Promise<void>) => {
   }
 
   try {
-    // Check session in database (SQLite uses datetime('now') instead of NOW())
+    // Check session in database (PostgreSQL uses NOW(), SQLite/D1 uses datetime('now'))
+    // Using ? placeholder - will be converted to $1 by db.ts
     const sessions = await query<{ user_id: string; expires_at: string }>(
-      "SELECT user_id, expires_at FROM user_sessions WHERE session_token = ? AND expires_at > datetime('now')",
+      "SELECT user_id, expires_at FROM user_sessions WHERE session_token = ? AND expires_at > NOW()",
       [sessionToken]
     );
 
@@ -359,7 +365,7 @@ app.post("/api/profile/photo", authMiddleware, async (c) => {
 
     // Update user profile with new photo URL
     await execute(
-      "UPDATE user_profiles SET profile_photo_url = ?, updated_at = datetime('now') WHERE user_id = ?",
+      "UPDATE user_profiles SET profile_photo_url = ?, updated_at = NOW() WHERE user_id = ?",
       [publicUrl, user!.id]
     );
 
@@ -418,7 +424,7 @@ const adminMiddleware = async (c: any, next: () => Promise<void>) => {
     `SELECT au.*, ads.expires_at 
      FROM admin_users au 
      JOIN admin_sessions ads ON au.id = ads.admin_id 
-     WHERE ads.session_token = ? AND ads.expires_at > datetime('now')`,
+     WHERE ads.session_token = ? AND ads.expires_at > NOW()`,
     [token]
   );
 
@@ -558,7 +564,7 @@ app.get("/api/auth/google/callback", async (c) => {
           subscriptionPlan = regCode.plan_id;
           // Increment usage
           await execute(
-            "UPDATE registration_codes SET current_uses = current_uses + 1, updated_at = datetime('now') WHERE code = ?",
+            "UPDATE registration_codes SET current_uses = current_uses + 1, updated_at = NOW() WHERE code = ?",
             [registrationCode]
           );
         }
@@ -581,7 +587,7 @@ app.get("/api/auth/google/callback", async (c) => {
       userId = googleUser.id;
       await execute(
         `INSERT INTO users (user_id, email, name, google_user_id, profile_picture_url, signup_source, subscription_plan, last_login_at)
-         VALUES (?, ?, ?, ?, ?, 'google-oauth', ?, datetime('now'))`,
+         VALUES (?, ?, ?, ?, ?, 'google-oauth', ?, NOW())`,
         [
           userId,
           googleUser.email,
@@ -603,7 +609,7 @@ app.get("/api/auth/google/callback", async (c) => {
       // Update existing user
       userId = existingUsers[0].user_id;
       await execute(
-        "UPDATE users SET last_login_at = datetime('now'), updated_at = datetime('now') WHERE user_id = ?",
+        "UPDATE users SET last_login_at = NOW(), updated_at = NOW() WHERE user_id = ?",
         [userId]
       );
 
@@ -615,7 +621,7 @@ app.get("/api/auth/google/callback", async (c) => {
         
         if (newLevel > currentLevel) {
           await execute(
-            "UPDATE users SET subscription_plan = ?, updated_at = datetime('now') WHERE user_id = ?",
+            "UPDATE users SET subscription_plan = ?, updated_at = NOW() WHERE user_id = ?",
             [subscriptionPlan, userId]
           );
         }
