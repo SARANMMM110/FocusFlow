@@ -393,6 +393,29 @@ const adminMiddleware = async (c: any, next: () => Promise<void>) => {
   await next();
 };
 
+// Helper function to get the correct origin (handles reverse proxy HTTPS)
+function getOrigin(c: any): string {
+  // Check X-Forwarded-Proto header (set by reverse proxies like Render)
+  const forwardedProto = c.req.header("X-Forwarded-Proto");
+  if (forwardedProto === "https") {
+    const host = c.req.header("X-Forwarded-Host") || c.req.header("Host") || new URL(c.req.url).host;
+    return `https://${host}`;
+  }
+  
+  // Use FRONTEND_URL if available (extract origin from it)
+  if (c.env.FRONTEND_URL) {
+    try {
+      const frontendUrl = new URL(c.env.FRONTEND_URL);
+      return frontendUrl.origin;
+    } catch (e) {
+      // If FRONTEND_URL is not a valid URL, fall through
+    }
+  }
+  
+  // Fall back to request origin
+  return new URL(c.req.url).origin;
+}
+
 // Auth endpoints
 app.get("/api/oauth/google/redirect_url", async (c) => {
   try {
@@ -400,7 +423,7 @@ app.get("/api/oauth/google/redirect_url", async (c) => {
       return c.json({ error: "Google OAuth not configured" }, 500);
     }
 
-    const origin = new URL(c.req.url).origin;
+    const origin = getOrigin(c);
     const plan = c.req.query("plan");
     const registrationCode = c.req.query("code"); // Registration code from URL
     
@@ -455,7 +478,7 @@ app.get("/api/auth/google/callback", async (c) => {
       return c.redirect(`${frontendUrl}/?error=oauth_not_configured`);
     }
 
-    const origin = new URL(c.req.url).origin;
+    const origin = getOrigin(c);
     
     // Parse state to get plan and registration code
     let plan = "free";
