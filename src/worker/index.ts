@@ -1244,32 +1244,38 @@ app.get("/api/tasks", authMiddleware, async (c) => {
 });
 
 app.post("/api/tasks", authMiddleware, zValidator("json", CreateTaskSchema), async (c) => {
-  const user = c.get("user");
-  const data = c.req.valid("json");
+  try {
+    const user = c.get("user");
+    const data = c.req.valid("json");
 
-  const tagsJson = data.tags ? JSON.stringify(data.tags) : null;
+    const tagsJson = data.tags ? JSON.stringify(data.tags) : null;
 
-  const result = await execute(
-    `INSERT INTO tasks (user_id, title, description, priority, estimated_minutes, project, due_date, tags, status)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'todo')`,
-    [
-      user!.id, 
-      data.title, 
-      data.description || null, 
-      data.priority || 0, 
-      data.estimated_minutes || null,
-      data.project || null,
-      data.due_date || null,
-      tagsJson
-    ]
-  );
+    // Use RETURNING clause to get the inserted row directly (PostgreSQL)
+    const results = await query(
+      `INSERT INTO tasks (user_id, title, description, priority, estimated_minutes, project, due_date, tags, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'todo')
+       RETURNING *`,
+      [
+        user!.id, 
+        data.title, 
+        data.description || null, 
+        data.priority || 0, 
+        data.estimated_minutes || null,
+        data.project || null,
+        data.due_date || null,
+        tagsJson
+      ]
+    );
 
-  const results = await query(
-    "SELECT * FROM tasks WHERE id = ?",
-    [result.insertId]
-  );
+    if (results.length === 0) {
+      return c.json({ error: "Failed to create task" }, 500);
+    }
 
-  return c.json(results[0], 201);
+    return c.json(results[0], 201);
+  } catch (error) {
+    console.error("Error creating task:", error);
+    return c.json({ error: "Failed to create task" }, 500);
+  }
 });
 
 app.patch("/api/tasks/:id", authMiddleware, zValidator("json", UpdateTaskSchema), async (c) => {
@@ -1839,129 +1845,146 @@ app.get("/api/user/subscription", authMiddleware, async (c) => {
 
 // Streak endpoint - increments on any day with ≥25 minutes focused
 app.get("/api/streak", authMiddleware, async (c) => {
-  const user = c.get("user");
+  try {
+    const user = c.get("user");
 
-  // Get all days with at least 25 minutes of focus time
-  const results = await query<{ date: string; total_minutes: number }>(`
-    SELECT DATE(start_time) as date, SUM(duration_minutes) as total_minutes
-    FROM focus_sessions
-    WHERE user_id = ? AND session_type = 'focus' AND end_time IS NOT NULL
-    GROUP BY DATE(start_time)
-    HAVING total_minutes >= 25
-    ORDER BY date DESC
-  `, [user!.id]);
+    // Get all days with at least 25 minutes of focus time
+    const results = await query<{ date: string; total_minutes: number }>(`
+      SELECT start_time::DATE as date, SUM(duration_minutes) as total_minutes
+      FROM focus_sessions
+      WHERE user_id = ? AND session_type = 'focus' AND end_time IS NOT NULL
+      GROUP BY start_time::DATE
+      HAVING SUM(duration_minutes) >= 25
+      ORDER BY date DESC
+    `, [user!.id]);
 
-  if (results.length === 0) {
-    return c.json({ streak: 0 });
-  }
-
-  let streak = 0;
-  const today = new Date().toISOString().split('T')[0];
-  const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-
-  // Check if there's a qualifying session today or yesterday to start the streak
-  const firstDate = results[0].date as string;
-  if (firstDate !== today && firstDate !== yesterday) {
-    return c.json({ streak: 0 });
-  }
-
-  // Count consecutive days
-  let expectedDate = new Date();
-  if (firstDate === yesterday) {
-    expectedDate = new Date(Date.now() - 86400000);
-  }
-
-  for (const row of results) {
-    const sessionDate = row.date as string;
-    const expectedDateStr = expectedDate.toISOString().split('T')[0];
-
-    if (sessionDate === expectedDateStr) {
-      streak++;
-      expectedDate = new Date(expectedDate.getTime() - 86400000);
-    } else {
-      break;
+    if (results.length === 0) {
+      return c.json({ streak: 0 });
     }
-  }
 
-  return c.json({ streak });
+    let streak = 0;
+    const today = new Date().toISOString().split('T')[0];
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+
+    // Check if there's a qualifying session today or yesterday to start the streak
+    const firstDate = results[0].date as string;
+    if (firstDate !== today && firstDate !== yesterday) {
+      return c.json({ streak: 0 });
+    }
+
+    // Count consecutive days
+    let expectedDate = new Date();
+    if (firstDate === yesterday) {
+      expectedDate = new Date(Date.now() - 86400000);
+    }
+
+    for (const row of results) {
+      const sessionDate = row.date as string;
+      const expectedDateStr = expectedDate.toISOString().split('T')[0];
+
+      if (sessionDate === expectedDateStr) {
+        streak++;
+        expectedDate = new Date(expectedDate.getTime() - 86400000);
+      } else {
+        break;
+      }
+    }
+
+    return c.json({ streak });
+  } catch (error) {
+    console.error("Error fetching streak:", error);
+    return c.json({ error: "Failed to fetch streak", streak: 0 }, 500);
+  }
 });
 
 // Dashboard stats endpoint
 app.get("/api/dashboard-stats", authMiddleware, async (c) => {
-  const user = c.get("user");
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  try {
+    const user = c.get("user");
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  // Today's focus time
-  const todayResults = await query<{ total_minutes: number }>(`
-    SELECT COALESCE(SUM(duration_minutes), 0) as total_minutes
-    FROM focus_sessions
-    WHERE user_id = ? AND session_type = 'focus' AND end_time IS NOT NULL AND start_time >= ?
-  `, [user!.id, todayStart]);
+    // Today's focus time
+    const todayResults = await query<{ total_minutes: number }>(`
+      SELECT COALESCE(SUM(duration_minutes), 0) as total_minutes
+      FROM focus_sessions
+      WHERE user_id = ? AND session_type = 'focus' AND end_time IS NOT NULL AND start_time >= ?
+    `, [user!.id, todayStart]);
 
-  // Week's focus time
-  const weekResults = await query<{ total_minutes: number }>(`
-    SELECT COALESCE(SUM(duration_minutes), 0) as total_minutes
-    FROM focus_sessions
-    WHERE user_id = ? AND session_type = 'focus' AND end_time IS NOT NULL AND start_time >= ?
-  `, [user!.id, weekAgo]);
+    // Week's focus time
+    const weekResults = await query<{ total_minutes: number }>(`
+      SELECT COALESCE(SUM(duration_minutes), 0) as total_minutes
+      FROM focus_sessions
+      WHERE user_id = ? AND session_type = 'focus' AND end_time IS NOT NULL AND start_time >= ?
+    `, [user!.id, weekAgo]);
 
-  // Completed tasks today
-  const completedResults = await query<{ count: number }>(`
-    SELECT COUNT(*) as count
-    FROM tasks
-    WHERE user_id = ? AND is_completed = 1 AND completed_at >= ?
-  `, [user!.id, todayStart]);
+    // Completed tasks today
+    const completedResults = await query<{ count: number }>(`
+      SELECT COUNT(*) as count
+      FROM tasks
+      WHERE user_id = ? AND is_completed = TRUE AND completed_at >= ?
+    `, [user!.id, todayStart]);
 
-  // Average session length (last 30 days)
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
-  const avgResults = await query<{ avg_minutes: number }>(`
-    SELECT AVG(duration_minutes) as avg_minutes
-    FROM focus_sessions
-    WHERE user_id = ? AND session_type = 'focus' AND end_time IS NOT NULL AND start_time >= ?
-  `, [user!.id, thirtyDaysAgo]);
+    // Average session length (last 30 days)
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const avgResults = await query<{ avg_minutes: number }>(`
+      SELECT AVG(duration_minutes) as avg_minutes
+      FROM focus_sessions
+      WHERE user_id = ? AND session_type = 'focus' AND end_time IS NOT NULL AND start_time >= ?
+    `, [user!.id, thirtyDaysAgo]);
 
-  // Longest streak
-  const streakDays = await query<{ date: string; total_minutes: number }>(`
-    SELECT DATE(start_time) as date, SUM(duration_minutes) as total_minutes
-    FROM focus_sessions
-    WHERE user_id = ? AND session_type = 'focus' AND end_time IS NOT NULL
-    GROUP BY DATE(start_time)
-    HAVING total_minutes >= 25
-    ORDER BY date DESC
-  `, [user!.id]);
+    // Longest streak
+    const streakDays = await query<{ date: string; total_minutes: number }>(`
+      SELECT start_time::DATE as date, SUM(duration_minutes) as total_minutes
+      FROM focus_sessions
+      WHERE user_id = ? AND session_type = 'focus' AND end_time IS NOT NULL
+      GROUP BY start_time::DATE
+      HAVING SUM(duration_minutes) >= 25
+      ORDER BY date DESC
+    `, [user!.id]);
 
-  let longestStreak = 0;
-  let currentStreak = 0;
-  let lastDate: Date | null = null;
+    let longestStreak = 0;
+    let currentStreak = 0;
+    let lastDate: Date | null = null;
 
-  for (const row of streakDays) {
-    const currentDate = new Date(row.date as string);
-    
-    if (lastDate === null) {
-      currentStreak = 1;
-    } else {
-      const dayDiff = Math.round((lastDate.getTime() - currentDate.getTime()) / (24 * 60 * 60 * 1000));
-      if (dayDiff === 1) {
-        currentStreak++;
-      } else {
-        longestStreak = Math.max(longestStreak, currentStreak);
+    for (const row of streakDays) {
+      const currentDate = new Date(row.date as string);
+      
+      if (lastDate === null) {
         currentStreak = 1;
+      } else {
+        const dayDiff = Math.round((lastDate.getTime() - currentDate.getTime()) / (24 * 60 * 60 * 1000));
+        if (dayDiff === 1) {
+          currentStreak++;
+        } else {
+          longestStreak = Math.max(longestStreak, currentStreak);
+          currentStreak = 1;
+        }
       }
+      
+      lastDate = currentDate;
     }
-    
-    lastDate = currentDate;
-  }
-  longestStreak = Math.max(longestStreak, currentStreak);
+    longestStreak = Math.max(longestStreak, currentStreak);
 
-  return c.json({
-    today_focus_minutes: todayResults[0]?.total_minutes || 0,
-    week_focus_minutes: weekResults[0]?.total_minutes || 0,
-    completed_today: completedResults[0]?.count || 0,
-    avg_session_minutes: Math.round(avgResults[0]?.avg_minutes || 0),
-    longest_streak: longestStreak,
-  });
+    return c.json({
+      today_focus_minutes: todayResults[0]?.total_minutes || 0,
+      week_focus_minutes: weekResults[0]?.total_minutes || 0,
+      completed_today: completedResults[0]?.count || 0,
+      avg_session_minutes: Math.round(avgResults[0]?.avg_minutes || 0),
+      longest_streak: longestStreak,
+    });
+  } catch (error) {
+    console.error("Error fetching dashboard stats:", error);
+    return c.json({ 
+      error: "Failed to fetch dashboard stats",
+      today_focus_minutes: 0,
+      week_focus_minutes: 0,
+      completed_today: 0,
+      avg_session_minutes: 0,
+      longest_streak: 0,
+    }, 500);
+  }
 });
 
 // Sessions by mode endpoint

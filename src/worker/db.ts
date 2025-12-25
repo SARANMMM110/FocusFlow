@@ -77,17 +77,42 @@ function convertPlaceholders(sql: string): string {
 }
 
 /**
+ * Convert MySQL/SQLite syntax to PostgreSQL
+ */
+function convertToPostgreSQL(sql: string): string {
+  // Convert DATE() function to PostgreSQL ::DATE cast
+  sql = sql.replace(/DATE\(([^)]+)\)/gi, (match, column) => {
+    return `${column.trim()}::DATE`;
+  });
+  
+  // Convert boolean comparisons (is_completed = 1 -> is_completed = TRUE)
+  // But be careful not to replace in string literals
+  sql = sql.replace(/\bis_completed\s*=\s*1\b/gi, "is_completed = TRUE");
+  sql = sql.replace(/\bis_completed\s*=\s*0\b/gi, "is_completed = FALSE");
+  sql = sql.replace(/\bis_active\s*=\s*1\b/gi, "is_active = TRUE");
+  sql = sql.replace(/\bis_active\s*=\s*0\b/gi, "is_active = FALSE");
+  sql = sql.replace(/\bis_super_admin\s*=\s*1\b/gi, "is_super_admin = TRUE");
+  sql = sql.replace(/\bis_super_admin\s*=\s*0\b/gi, "is_super_admin = FALSE");
+  
+  return sql;
+}
+
+/**
  * Execute a SELECT query and return results
  */
 export async function query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
   const db = getDatabase();
   try {
-    // Replace SQLite-specific syntax with PostgreSQL
-    const pgSql = convertPlaceholders(
-      sql
-        .replace(/datetime\('now'\)/gi, "NOW()")
-        .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/gi, "SERIAL PRIMARY KEY")
-    );
+    // Convert to PostgreSQL syntax
+    let pgSql = sql
+      .replace(/datetime\('now'\)/gi, "NOW()")
+      .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/gi, "SERIAL PRIMARY KEY");
+    
+    // Convert MySQL/SQLite syntax to PostgreSQL
+    pgSql = convertToPostgreSQL(pgSql);
+    
+    // Convert placeholders
+    pgSql = convertPlaceholders(pgSql);
     
     const result = await db.query(pgSql, params);
     return result.rows as T[];
@@ -107,12 +132,16 @@ export async function query<T = any>(sql: string, params: any[] = []): Promise<T
 export async function execute(sql: string, params: any[] = []): Promise<{ affectedRows: number; insertId?: number }> {
   const db = getDatabase();
   try {
-    // Replace SQLite-specific syntax with PostgreSQL
-    const pgSql = convertPlaceholders(
-      sql
-        .replace(/datetime\('now'\)/gi, "NOW()")
-        .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/gi, "SERIAL PRIMARY KEY")
-    );
+    // Convert to PostgreSQL syntax
+    let pgSql = sql
+      .replace(/datetime\('now'\)/gi, "NOW()")
+      .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/gi, "SERIAL PRIMARY KEY");
+    
+    // Convert MySQL/SQLite syntax to PostgreSQL
+    pgSql = convertToPostgreSQL(pgSql);
+    
+    // Convert placeholders
+    pgSql = convertPlaceholders(pgSql);
     
     const result = await db.query(pgSql, params);
     
