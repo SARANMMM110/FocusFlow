@@ -259,7 +259,11 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at);
 
--- Create function to update updated_at timestamp
+-- Create function to update updated_at timestamp (optional)
+-- Uncomment the function and triggers below if you want database-level timestamp updates
+-- Otherwise, updated_at is handled in application code
+
+/*
 CREATE OR REPLACE FUNCTION update_updated_at_column()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -268,9 +272,6 @@ BEGIN
 END;
 $$ language 'plpgsql';
 
--- Create triggers for updated_at (optional - can be handled in application code)
--- Uncomment if you want database-level timestamp updates
-/*
 CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 

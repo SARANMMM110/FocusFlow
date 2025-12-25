@@ -35,7 +35,7 @@ export function initDatabase(config: DatabaseConfig): Pool {
     ssl: config.ssl ? { rejectUnauthorized: false } : false,
     max: 20,
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 2000,
+    connectionTimeoutMillis: 10000, // Increased timeout for external connections (Render, etc.)
   };
 
   pool = new Pool(poolConfig);

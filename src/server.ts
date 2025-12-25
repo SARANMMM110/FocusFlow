@@ -27,23 +27,28 @@ let dbConfig;
 if (process.env.DATABASE_URL) {
   // Parse PostgreSQL connection URL
   const url = new URL(process.env.DATABASE_URL);
+  // Render PostgreSQL requires SSL - enable it by default for external hosts
+  const isRenderHost = url.hostname.includes("render.com") || url.hostname.includes(".render");
   dbConfig = {
     host: url.hostname,
     port: parseInt(url.port || "5432"),
     user: url.username,
     password: url.password,
     database: url.pathname.slice(1), // Remove leading /
-    ssl: process.env.DB_SSL === "true" || url.searchParams.get("sslmode") === "require",
+    ssl: isRenderHost || process.env.DB_SSL === "true" || url.searchParams.get("sslmode") === "require",
   };
 } else {
   // Use individual environment variables
+  // Enable SSL by default for Render hosts
+  const host = process.env.DB_HOST || "localhost";
+  const isRenderHost = host.includes("render.com") || host.includes(".render");
   dbConfig = {
-    host: process.env.DB_HOST || "localhost",
+    host: host,
     port: parseInt(process.env.DB_PORT || "5432"),
     user: process.env.DB_USER || "postgres",
     password: process.env.DB_PASSWORD || "",
     database: process.env.DB_NAME || "focusflow",
-    ssl: process.env.DB_SSL === "true",
+    ssl: isRenderHost || process.env.DB_SSL === "true",
   };
 }
 
