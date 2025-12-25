@@ -1,0 +1,23 @@
+# Cloudflare Workers Environment Variables
+# Copy this file to .dev.vars and fill in your actual values
+# .dev.vars is gitignored and used for local development
+
+# Mocha Users Service Configuration
+# Get these from https://getmocha.com or your Mocha dashboard
+MOCHA_USERS_SERVICE_API_URL=https://api.getmocha.com
+MOCHA_USERS_SERVICE_API_KEY=your_api_key_here
+
+# Optional: Systeme.io Integration
+# SYSTEME_IO_API_KEY=your_systeme_io_api_key
+
+# Optional: AWeber Integration
+# AWEBER_CLIENT_ID=your_aweber_client_id
+# AWEBER_CLIENT_SECRET=your_aweber_client_secret
+# AWEBER_ACCESS_TOKEN=your_aweber_access_token
+# AWEBER_ACCOUNT_ID=your_aweber_account_id
+# AWEBER_LIST_ID=your_aweber_list_id
+
+# Optional: Google Calendar Integration
+# GOOGLE_CALENDAR_CLIENT_ID=your_google_calendar_client_id
+# GOOGLE_CALENDAR_CLIENT_SECRET=your_google_calendar_client_secret
+
