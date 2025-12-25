@@ -1321,6 +1321,7 @@ app.patch("/api/tasks/:id", authMiddleware, zValidator("json", UpdateTaskSchema)
       values.push(data.actual_minutes);
     }
     if (data.is_completed !== undefined) {
+      // PostgreSQL uses TRUE/FALSE for boolean, but our conversion function handles 1/0
       updates.push("is_completed = ?");
       values.push(data.is_completed ? 1 : 0);
       if (data.is_completed) {
@@ -1368,6 +1369,10 @@ app.patch("/api/tasks/:id", authMiddleware, zValidator("json", UpdateTaskSchema)
       [id]
     );
 
+    if (results.length === 0) {
+      return c.json({ error: "Task not found after update" }, 404);
+    }
+
     const updatedTask = results[0];
 
     // If task was just completed and Notion sync is enabled, trigger sync
@@ -1376,10 +1381,17 @@ app.patch("/api/tasks/:id", authMiddleware, zValidator("json", UpdateTaskSchema)
     }
 
     return c.json(updatedTask);
-  } catch (error) {
-    console.error("Error updating task:", error);
+  } catch (error: any) {
+    console.error("Error updating task:", {
+      error: error.message,
+      code: error.code,
+      detail: error.detail,
+      sql: error.sql,
+      stack: error.stack
+    });
     return c.json({ 
       error: "Failed to update task",
+      details: error.message,
       details: error instanceof Error ? error.message : String(error)
     }, 500);
   }

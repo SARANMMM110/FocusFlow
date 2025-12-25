@@ -98,6 +98,49 @@ function convertToPostgreSQL(sql: string): string {
 }
 
 /**
+ * Convert parameter values for PostgreSQL (especially booleans)
+ * PostgreSQL accepts 1/0 for boolean columns, but we'll convert them to proper booleans
+ */
+function convertParamsForPostgreSQL(sql: string, params: any[]): any[] {
+  // List of boolean columns in the database
+  const booleanColumns = ['is_completed', 'is_active', 'is_super_admin', 'auto_start_breaks', 'auto_start_focus', 'minimal_mode_enabled', 'show_motivational_prompts', 'notion_sync_enabled', 'custom_theme_enabled', 'marketing_consent'];
+  
+  // Find all ? placeholders and track which parameter index they correspond to
+  let paramIndex = 0;
+  const convertedParams = [...params];
+  
+  // For each boolean column, find assignments like "is_completed = ?" and convert the corresponding param
+  booleanColumns.forEach((col) => {
+    const regex = new RegExp(`\\b${col}\\s*=\\s*\\?`, 'gi');
+    let match;
+    const matches: number[] = [];
+    
+    // Find all matches and their positions
+    while ((match = regex.exec(sql)) !== null) {
+      // Count how many ? placeholders come before this one
+      const sqlBefore = sql.substring(0, match.index);
+      const placeholderCount = (sqlBefore.match(/\?/g) || []).length;
+      matches.push(placeholderCount);
+    }
+    
+    // Convert the corresponding parameter values
+    matches.forEach((paramIdx) => {
+      if (paramIdx < convertedParams.length) {
+        const value = convertedParams[paramIdx];
+        // Convert 1/0 or true/false to proper PostgreSQL boolean
+        if (value === 1 || value === true) {
+          convertedParams[paramIdx] = true;
+        } else if (value === 0 || value === false) {
+          convertedParams[paramIdx] = false;
+        }
+      }
+    });
+  });
+  
+  return convertedParams;
+}
+
+/**
  * Execute a SELECT query and return results
  */
 export async function query<T = any>(sql: string, params: any[] = []): Promise<T[]> {
@@ -140,10 +183,14 @@ export async function execute(sql: string, params: any[] = []): Promise<{ affect
     // Convert MySQL/SQLite syntax to PostgreSQL
     pgSql = convertToPostgreSQL(pgSql);
     
-    // Convert placeholders
+    // Convert placeholders first (before parameter conversion)
     pgSql = convertPlaceholders(pgSql);
     
-    const result = await db.query(pgSql, params);
+    // Convert parameter values for PostgreSQL (especially booleans)
+    // Note: This must happen AFTER placeholder conversion to match the correct params
+    const convertedParams = convertParamsForPostgreSQL(sql, [...params]);
+    
+    const result = await db.query(pgSql, convertedParams);
     
     // For INSERT queries, get the last inserted ID from RETURNING clause or result
     let insertId: number | undefined;
